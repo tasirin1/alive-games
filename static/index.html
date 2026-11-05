@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Alive Games — Catur AI vs Manusia</title>
+<style>
+  body { font-family: sans-serif; background:#1e1e2e; color:#eee; margin:0; padding:12px; text-align:center; }
+  h1 { font-size:20px; margin:6px 0 2px; }
+  #status { margin:8px 0; min-height:22px; font-weight:bold; }
+  #board { display:grid; grid-template-columns:repeat(8,1fr); width:min(92vw,440px); margin:0 auto; border:2px solid #555; }
+  .sq { aspect-ratio:1; display:flex; align-items:center; justify-content:center; font-size:min(9vw,40px); cursor:pointer; user-select:none; }
+  .light { background:#f0d9b5; color:#000; } .dark { background:#b58863; color:#000; }
+  .sel { outline:3px solid #e91e63; outline-offset:-3px; }
+  .hint { box-shadow: inset 0 0 0 4px rgba(76,175,80,.85); }
+  #moves { max-width:440px; margin:10px auto; text-align:left; font-size:14px; line-height:1.5; word-break:break-word; }
+  input, button { font-size:15px; padding:8px; border-radius:6px; border:1px solid #555; }
+  button { background:#e91e63; color:#fff; border:none; cursor:pointer; }
+  #join { margin:10px 0; }
+  .small { font-size:12px; color:#aaa; }
+</style>
+</head>
+<body>
+<h1>♟️ Alive Games</h1>
+<div id="join">
+  <input id="gid" placeholder="kode game dari Alive" size="16">
+  <button onclick="join()">Masuk</button>
+  <div class="small">atau buka link yang dikirim Alive, contoh: /?g=kodegame</div>
+</div>
+<div id="status">Masukkan kode game dulu ya</div>
+<div id="board"></div>
+<div id="moves"></div>
+
+<script>
+const GLYPH = {k:'♚',q:'♛',r:'♜',b:'♝',n:'♞',p:'♟'};
+let gid = null, state = null, selected = null;
+
+function fenBoard(fen){
+  const rows = fen.split(' ')[0].split('/');
+  const b = {};
+  rows.forEach((row, r) => {
+    let f = 0;
+    for (const ch of row){
+      if (/\d/.test(ch)) f += +ch;
+      else {
+        const sq = 'abcdefgh'[f] + (8 - r);
+        b[sq] = { t: ch.toLowerCase(), white: ch === ch.toUpperCase() };
+        f++;
+      }
+    }
+  });
+  return b;
+}
+
+function render(){
+  const el = document.getElementById('board');
+  el.innerHTML = '';
+  if (!state) return;
+  const b = fenBoard(state.fen);
+  const humanWhite = state.human_color === 'white';
+  const ranks = humanWhite ? [8,7,6,5,4,3,2,1] : [1,2,3,4,5,6,7,8];
+  const files = humanWhite ? 'abcdefgh' : 'hgfedcba';
+  const targets = selected ? state.legal_moves.filter(m => m.startsWith(selected)).map(m => m.slice(2,4)) : [];
+  for (const r of ranks) for (const f of files){
+    const sq = f + r;
+    const d = document.createElement('div');
+    d.className = 'sq ' + (((f.charCodeAt(0) + r) % 2 === 0) ? 'dark' : 'light');
+    if (sq === selected) d.className += ' sel';
+    if (targets.includes(sq)) d.className += ' hint';
+    const p = b[sq];
+    if (p){ d.textContent = GLYPH[p.t]; d.style.color = p.white ? '#fff' : '#111'; d.style.textShadow = p.white ? '0 0 3px #000' : '0 0 3px #fff'; }
+    d.onclick = () => tap(sq);
+    el.appendChild(d);
+  }
+  const st = document.getElementById('status');
+  if (state.status !== 'playing'){
+    st.textContent = state.status === 'checkmate'
+      ? ('Skakmat! Pemenang: ' + (state.winner === state.human_color ? 'KAMU 🎉' : 'Alive'))
+      : 'Permainan selesai: ' + state.status;
+  } else {
+    st.textContent = (state.turn === state.human_color ? 'Giliran KAMU' : 'Giliran Alive…')
+      + (state.check ? ' — SKAK!' : '');
+  }
+  const mv = state.moves.map((m, i) => (i % 2 === 0 ? ((i/2 + 1) + '. ') : '') + m).join(' ');
+  document.getElementById('moves').textContent = mv || '(belum ada langkah)';
+}
+
+async function refresh(){
+  if (!gid) return;
+  try {
+    const r = await fetch('/api/games/' + gid);
+    if (!r.ok) { document.getElementById('status').textContent = 'Game tidak ditemukan'; return; }
+    state = await r.json();
+    render();
+  } catch(e) {}
+}
+
+async function tap(sq){
+  if (!state || state.status !== 'playing' || state.turn !== state.human_color) return;
+  const b = fenBoard(state.fen);
+  const p = b[sq];
+  if (selected){
+    const cand = state.legal_moves.filter(m => m === selected + sq || m === selected + sq + 'q');
+    if (cand.length){
+      const move = cand.find(m => m.length === 5) || cand[0]; // promosi otomatis menteri
+      selected = null;
+      await fetch('/api/games/' + gid + '/move/human', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({move})
+      });
+      await refresh();
+      return;
+    }
+  }
+  selected = (p && ((p.white ? 'white' : 'black') === state.human_color)) ? sq : null;
+  render();
+}
+
+function join(){
+  const v = document.getElementById('gid').value.trim();
+  const m = v.match(/g=([a-z0-9]+)/i) || v.match(/([a-z0-9]{8,})/i);
+  gid = m ? m[1] : v;
+  localStorage.setItem('gid', gid);
+  history.replaceState(null, '', '?g=' + gid);
+  refresh();
+}
+
+(function init(){
+  const q = new URLSearchParams(location.search).get('g');
+  gid = q || localStorage.getItem('gid');
+  if (gid){ document.getElementById('gid').value = gid; refresh(); }
+  setInterval(refresh, 2000);
+})();
+</script>
+</body>
+</html>
